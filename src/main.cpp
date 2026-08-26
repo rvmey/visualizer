@@ -396,10 +396,10 @@ static void handleKeyDown(SDL_Event& event, AppContext& ctx, bool& running)
         ctx.helpOverlay->visible = !ctx.helpOverlay->visible;
     }
     else if (key == SDLK_RIGHT) {
-        projectm_playlist_play_next(ctx.playlist, true);
+        projectm_playlist_play_next(ctx.playlist, false);
     }
     else if (key == SDLK_LEFT) {
-        projectm_playlist_play_previous(ctx.playlist, true);
+        projectm_playlist_play_previous(ctx.playlist, false);
     }
     else if (key == SDLK_SPACE) {
         ctx.presetLocked = !ctx.presetLocked;
@@ -412,7 +412,7 @@ static void handleKeyDown(SDL_Event& event, AppContext& ctx, bool& running)
         updateWindowTitle(ctx);
     }
     else if (key == SDLK_r) {
-        projectm_playlist_play_next(ctx.playlist, true);
+        projectm_playlist_play_next(ctx.playlist, false);
     }
     else if (key == SDLK_f || key == SDLK_F11) {
         toggleFullscreen(ctx);
