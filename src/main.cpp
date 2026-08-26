@@ -21,6 +21,7 @@
 #include <projectM-4/playlist_memory.h>
 
 #include "audio_capture.h"
+#include "preset_switcher.h"
 
 // --- Help Overlay ---
 
@@ -41,7 +42,6 @@ static const int kHelpLineCount = sizeof(kHelpText) / sizeof(kHelpText[0]);
 
 struct HelpOverlay {
     GLuint program = 0;
-    GLuint vao = 0;
     GLuint vbo = 0;
     GLuint texture = 0;
     int texW = 0;
@@ -197,17 +197,10 @@ bool HelpOverlay::init()
         -1,  1,   0, 0,
     };
 
-    glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
-    glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
-                          reinterpret_cast<void*>(2 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     return true;
 }
@@ -254,9 +247,20 @@ void HelpOverlay::render(int screenW, int screenH)
     glBindTexture(GL_TEXTURE_2D, texture);
     glUniform1i(glGetUniformLocation(program, "uTex"), 0);
 
+    // The VAO isn't shareable across GL contexts, and this can be rendered
+    // under either of the app's two contexts (see PresetSwitcher), so it's
+    // created fresh here rather than cached.
+    GLuint vao = 0;
+    glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                          reinterpret_cast<void*>(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+    glDeleteVertexArrays(1, &vao);
 
     glUseProgram(0);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -271,7 +275,6 @@ void HelpOverlay::cleanup()
 {
     if (texture) { glDeleteTextures(1, &texture); texture = 0; }
     if (vbo) { glDeleteBuffers(1, &vbo); vbo = 0; }
-    if (vao) { glDeleteVertexArrays(1, &vao); vao = 0; }
     if (program) { glDeleteProgram(program); program = 0; }
     TTF_Quit();
 }
@@ -280,9 +283,7 @@ void HelpOverlay::cleanup()
 
 struct AppContext {
     SDL_Window* window = nullptr;
-    SDL_GLContext glCtx = nullptr;
-    projectm_handle pm = nullptr;
-    projectm_playlist_handle playlist = nullptr;
+    PresetSwitcher* switcher = nullptr;
     AudioManager* audio = nullptr;
     HelpOverlay* helpOverlay = nullptr;
     std::string presetPath;
@@ -292,12 +293,12 @@ struct AppContext {
     float beatSensitivity = 1.0f;
     int lastDrawW = 0;
     int lastDrawH = 0;
+    Uint32 lastAutoAdvance = 0;
     // Saved windowed geometry, to restore when leaving borderless fullscreen.
     int savedX = 0, savedY = 0, savedW = 0, savedH = 0;
 };
 
 // Keep projectM's render size matched to the window's drawable size.
-// projectM always renders to the default framebuffer at this size.
 static void syncWindowSize(AppContext& ctx)
 {
     int w = 0, h = 0;
@@ -305,7 +306,7 @@ static void syncWindowSize(AppContext& ctx)
     if (w > 0 && h > 0 && (w != ctx.lastDrawW || h != ctx.lastDrawH)) {
         ctx.lastDrawW = w;
         ctx.lastDrawH = h;
-        projectm_set_window_size(ctx.pm, w, h);
+        ctx.switcher->resize(w, h);
     }
 }
 
@@ -313,8 +314,8 @@ static void updateWindowTitle(AppContext& ctx)
 {
     std::string title = "MilkDrop Visualizer";
 
-    uint32_t index = projectm_playlist_get_position(ctx.playlist);
-    char* presetName = projectm_playlist_item(ctx.playlist, index);
+    uint32_t index = projectm_playlist_get_position(ctx.switcher->front.playlist);
+    char* presetName = projectm_playlist_item(ctx.switcher->front.playlist, index);
     if (presetName) {
         std::filesystem::path p(presetName);
         title += " - " + p.stem().string();
@@ -328,26 +329,6 @@ static void updateWindowTitle(AppContext& ctx)
     title += " | " + ctx.audio->getCurrentSourceName();
 
     SDL_SetWindowTitle(ctx.window, title.c_str());
-}
-
-static void onPresetSwitched(bool isHardCut, unsigned int index, void* userData)
-{
-    auto* ctx = static_cast<AppContext*>(userData);
-    updateWindowTitle(*ctx);
-}
-
-static void configureProjectM(projectm_handle pm, int w, int h, float beatSensitivity)
-{
-    projectm_set_window_size(pm, w, h);
-    projectm_set_preset_duration(pm, 30.0);
-    projectm_set_soft_cut_duration(pm, 3.0);
-    projectm_set_hard_cut_enabled(pm, true);
-    projectm_set_hard_cut_duration(pm, 20.0);
-    projectm_set_hard_cut_sensitivity(pm, 1.0f);
-    projectm_set_beat_sensitivity(pm, beatSensitivity);
-    projectm_set_mesh_size(pm, 48, 36);
-    projectm_set_fps(pm, 60);
-    projectm_set_aspect_correction(pm, true);
 }
 
 // Toggle borderless fake-fullscreen. Only the window changes size; projectM's
@@ -396,23 +377,31 @@ static void handleKeyDown(SDL_Event& event, AppContext& ctx, bool& running)
         ctx.helpOverlay->visible = !ctx.helpOverlay->visible;
     }
     else if (key == SDLK_RIGHT) {
-        projectm_playlist_play_next(ctx.playlist, false);
+        if (ctx.switcher->requestSwitch(SwitchDirection::Next)) {
+            ctx.lastAutoAdvance = SDL_GetTicks();
+        }
     }
     else if (key == SDLK_LEFT) {
-        projectm_playlist_play_previous(ctx.playlist, false);
+        if (ctx.switcher->requestSwitch(SwitchDirection::Previous)) {
+            ctx.lastAutoAdvance = SDL_GetTicks();
+        }
     }
     else if (key == SDLK_SPACE) {
         ctx.presetLocked = !ctx.presetLocked;
-        projectm_set_preset_locked(ctx.pm, ctx.presetLocked);
+        projectm_set_preset_locked(ctx.switcher->front.pm, ctx.presetLocked);
+        projectm_set_preset_locked(ctx.switcher->back.pm, ctx.presetLocked);
         updateWindowTitle(ctx);
     }
     else if (key == SDLK_y) {
         ctx.shuffleEnabled = !ctx.shuffleEnabled;
-        projectm_playlist_set_shuffle(ctx.playlist, ctx.shuffleEnabled);
+        projectm_playlist_set_shuffle(ctx.switcher->front.playlist, ctx.shuffleEnabled);
+        projectm_playlist_set_shuffle(ctx.switcher->back.playlist, ctx.shuffleEnabled);
         updateWindowTitle(ctx);
     }
     else if (key == SDLK_r) {
-        projectm_playlist_play_next(ctx.playlist, false);
+        if (ctx.switcher->requestSwitch(SwitchDirection::Next)) {
+            ctx.lastAutoAdvance = SDL_GetTicks();
+        }
     }
     else if (key == SDLK_f || key == SDLK_F11) {
         toggleFullscreen(ctx);
@@ -423,11 +412,13 @@ static void handleKeyDown(SDL_Event& event, AppContext& ctx, bool& running)
     }
     else if (key == SDLK_UP) {
         ctx.beatSensitivity = std::min(ctx.beatSensitivity + 0.1f, 5.0f);
-        projectm_set_beat_sensitivity(ctx.pm, ctx.beatSensitivity);
+        projectm_set_beat_sensitivity(ctx.switcher->front.pm, ctx.beatSensitivity);
+        projectm_set_beat_sensitivity(ctx.switcher->back.pm, ctx.beatSensitivity);
     }
     else if (key == SDLK_DOWN) {
         ctx.beatSensitivity = std::max(ctx.beatSensitivity - 0.1f, 0.1f);
-        projectm_set_beat_sensitivity(ctx.pm, ctx.beatSensitivity);
+        projectm_set_beat_sensitivity(ctx.switcher->front.pm, ctx.beatSensitivity);
+        projectm_set_beat_sensitivity(ctx.switcher->back.pm, ctx.beatSensitivity);
     }
 }
 
@@ -575,55 +566,39 @@ int main(int argc, char* argv[])
 
     int drawW = 0, drawH = 0;
     SDL_GL_GetDrawableSize(window, &drawW, &drawH);
-    configureProjectM(pm, drawW, drawH, 1.0f);
 
-    projectm_playlist_handle playlist = projectm_playlist_create(pm);
-    if (!playlist) {
-        SDL_Log("projectm_playlist_create() failed");
+    PresetSwitcher switcher;
+    if (!switcher.init(window, pm, drawW, drawH, presetPath)) {
+        SDL_Log("Failed to initialize preset switcher");
         projectm_destroy(pm);
         SDL_GL_DeleteContext(glCtx);
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
-
-    if (std::filesystem::is_directory(presetPath)) {
-        uint32_t added = projectm_playlist_add_path(playlist, presetPath.c_str(), true, false);
-        SDL_Log("Loaded %u presets from: %s", added, presetPath.c_str());
-        if (added == 0) {
-            SDL_Log("Warning: No .milk presets found in %s", presetPath.c_str());
-        }
+    SDL_Log("Loaded %u presets from: %s",
+            projectm_playlist_size(switcher.front.playlist), presetPath.c_str());
+    if (projectm_playlist_size(switcher.front.playlist) == 0) {
+        SDL_Log("Warning: No .milk presets found in %s", presetPath.c_str());
     }
-    else {
-        SDL_Log("Warning: Preset path does not exist: %s", presetPath.c_str());
-    }
-
-    projectm_playlist_set_shuffle(playlist, true);
 
     AudioManager audio;
-    audio.init(pm, audioSource);
+    audio.init(switcher.front.pm, audioSource);
 
     HelpOverlay helpOverlay;
     helpOverlay.init();
 
     AppContext ctx;
     ctx.window = window;
-    ctx.glCtx = glCtx;
-    ctx.pm = pm;
-    ctx.playlist = playlist;
+    ctx.switcher = &switcher;
     ctx.audio = &audio;
     ctx.helpOverlay = &helpOverlay;
     ctx.presetPath = presetPath;
     ctx.lastDrawW = drawW;
     ctx.lastDrawH = drawH;
 
-    projectm_playlist_set_preset_switched_event_callback(playlist, onPresetSwitched, &ctx);
-
+    switcher.pickInitialPreset();
     updateWindowTitle(ctx);
-
-    if (projectm_playlist_size(playlist) > 0) {
-        projectm_playlist_play_next(playlist, true);
-    }
 
     if (startFullscreen) {
         toggleFullscreen(ctx);
@@ -631,6 +606,8 @@ int main(int argc, char* argv[])
 
     bool running = true;
     const Uint32 frameDelay = 1000 / 60;
+    const Uint32 autoAdvanceDelay = 30000;
+    ctx.lastAutoAdvance = SDL_GetTicks();
 
     const bool profile = parseFlag(argc, argv, "--profile");
     std::FILE* profLog = nullptr;
@@ -669,14 +646,18 @@ int main(int argc, char* argv[])
         audio.processFrame();
         Uint64 t2 = SDL_GetPerformanceCounter();
 
-        // projectM always renders to the default framebuffer at its configured
-        // window size.
+        if (!ctx.presetLocked && switcher.state() == SwitchState::Idle &&
+            SDL_GetTicks() - ctx.lastAutoAdvance >= autoAdvanceDelay) {
+            if (switcher.requestSwitch(SwitchDirection::Next)) {
+                ctx.lastAutoAdvance = SDL_GetTicks();
+            }
+        }
+
         SDL_GL_GetDrawableSize(window, &drawW, &drawH);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, drawW, drawH);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        projectm_opengl_render_frame(ctx.pm);
+        switcher.renderFrame(audio, static_cast<double>(frameDelay) / 1000.0, drawW, drawH);
+        if (switcher.consumeSwapEvent()) {
+            updateWindowTitle(ctx);
+        }
 
         // Correctness probe: sample a pixel at 1/3 across (off the centered
         // help overlay) to confirm the visualization is actually rendering.
@@ -732,9 +713,7 @@ int main(int argc, char* argv[])
     }
     helpOverlay.cleanup();
     audio.shutdown();
-    projectm_playlist_destroy(ctx.playlist);
-    projectm_destroy(ctx.pm);
-    SDL_GL_DeleteContext(glCtx);
+    switcher.shutdown();
     SDL_DestroyWindow(window);
     SDL_Quit();
 

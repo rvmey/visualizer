@@ -96,7 +96,7 @@ void WasapiLoopback::shutdown()
     initialized_ = false;
 }
 
-void WasapiLoopback::captureFrame(projectm_handle pm)
+void WasapiLoopback::captureFrame(projectm_handle pm, projectm_handle secondary)
 {
     if (!initialized_ || !captureClient_) {
         return;
@@ -118,6 +118,10 @@ void WasapiLoopback::captureFrame(projectm_handle pm)
         if (data && numFrames > 0) {
             projectm_pcm_add_float(pm, reinterpret_cast<float*>(data),
                                    numFrames, PROJECTM_STEREO);
+            if (secondary) {
+                projectm_pcm_add_float(secondary, reinterpret_cast<float*>(data),
+                                       numFrames, PROJECTM_STEREO);
+            }
         }
 
         captureClient_->ReleaseBuffer(numFrames);
@@ -173,6 +177,7 @@ void SdlAudioCapture::shutdown()
     }
     active_ = false;
     pm_ = nullptr;
+    secondary_ = nullptr;
 }
 
 void SdlAudioCapture::start()
@@ -204,6 +209,17 @@ void SdlAudioCapture::updateHandle(projectm_handle pm)
     }
 }
 
+void SdlAudioCapture::setSecondary(projectm_handle pm)
+{
+    if (deviceId_ != 0) {
+        SDL_LockAudioDevice(deviceId_);
+    }
+    secondary_ = pm;
+    if (deviceId_ != 0) {
+        SDL_UnlockAudioDevice(deviceId_);
+    }
+}
+
 int SdlAudioCapture::getDeviceCount() const
 {
     return SDL_GetNumAudioDevices(SDL_TRUE);
@@ -223,6 +239,10 @@ void SdlAudioCapture::audioCallback(void* userdata, Uint8* stream, int len)
     unsigned int sampleFrames = static_cast<unsigned int>(len) / sizeof(float) / 2;
     projectm_pcm_add_float(self->pm_, reinterpret_cast<float*>(stream),
                            sampleFrames, PROJECTM_STEREO);
+    if (self->secondary_) {
+        projectm_pcm_add_float(self->secondary_, reinterpret_cast<float*>(stream),
+                               sampleFrames, PROJECTM_STEREO);
+    }
 }
 
 // --- Audio Manager ---
@@ -326,7 +346,7 @@ void AudioManager::processFrame()
 {
 #ifdef _WIN32
     if (currentSource_ == AudioSource::WASAPI_LOOPBACK) {
-        wasapi_.captureFrame(pm_);
+        wasapi_.captureFrame(pm_, secondary_);
     }
 #endif
 }
@@ -367,6 +387,18 @@ void AudioManager::updateHandle(projectm_handle pm)
 {
     pm_ = pm;
     sdlCapture_.updateHandle(pm);
+}
+
+void AudioManager::setSecondaryTarget(projectm_handle pm)
+{
+    secondary_ = pm;
+    sdlCapture_.setSecondary(pm);
+}
+
+void AudioManager::clearSecondaryTarget()
+{
+    secondary_ = nullptr;
+    sdlCapture_.setSecondary(nullptr);
 }
 
 std::string AudioManager::getCurrentSourceName() const

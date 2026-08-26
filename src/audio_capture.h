@@ -24,7 +24,7 @@ public:
 
     bool init();
     void shutdown();
-    void captureFrame(projectm_handle pm);
+    void captureFrame(projectm_handle pm, projectm_handle secondary = nullptr);
     bool isInitialized() const { return initialized_; }
 
 private:
@@ -47,6 +47,7 @@ public:
     void start();
     void stop();
     void updateHandle(projectm_handle pm);
+    void setSecondary(projectm_handle pm);
     int getDeviceCount() const;
     const char* getDeviceName(int index) const;
     int getCurrentDeviceIndex() const { return currentDevice_; }
@@ -57,6 +58,7 @@ private:
 
     SDL_AudioDeviceID deviceId_ = 0;
     projectm_handle pm_ = nullptr;
+    projectm_handle secondary_ = nullptr;
     int currentDevice_ = -1;
     bool active_ = false;
 };
@@ -71,12 +73,15 @@ public:
     void processFrame();
     void toggleSource();
     void updateHandle(projectm_handle pm);
+    void setSecondaryTarget(projectm_handle pm);
+    void clearSecondaryTarget();
     std::string getCurrentSourceName() const;
     AudioSource getCurrentSource() const { return currentSource_; }
     static void printAudioDevices();
 
 private:
     projectm_handle pm_ = nullptr;
+    projectm_handle secondary_ = nullptr;
 #ifdef _WIN32
     WasapiLoopback wasapi_;
 #endif

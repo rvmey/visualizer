@@ -14,6 +14,8 @@ add_executable(MilkdropVisualizer
     src/main.cpp
     src/audio_capture.cpp
     src/audio_capture.h
+    src/preset_switcher.cpp
+    src/preset_switcher.h
     app.rc
 )
 
