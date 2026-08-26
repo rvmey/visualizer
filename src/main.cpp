@@ -22,6 +22,7 @@
 
 #include "audio_capture.h"
 #include "preset_switcher.h"
+#include "preset_extractor.h"
 
 // --- Help Overlay ---
 
@@ -431,7 +432,8 @@ static void printHelp(const char* programName)
         "\n"
         "Options:\n"
         "  -p, --presets <path>   Path to directory containing .milk preset files\n"
-        "                         (default: \"presets\", or PROJECTM_PRESETS_PATH env var)\n"
+        "                         (default: presets embedded in this executable, or\n"
+        "                         PROJECTM_PRESETS_PATH env var)\n"
         "  -a, --audio <source>   Audio source: loopback, mic, device index, or name\n"
         "                         (default: loopback on Windows, mic otherwise)\n"
         "      --list-audio       List available audio capture devices and exit\n"
@@ -461,18 +463,21 @@ static std::string parseOption(int argc, char* argv[], const char* longOpt, cons
     return "";
 }
 
-static std::string parsePresetPath(int argc, char* argv[])
+// Returns the explicitly requested preset directory (via -p/--presets or
+// PROJECTM_PRESETS_PATH), or empty if the caller should fall back to the
+// presets embedded in this executable (see preset_extractor.h).
+static std::string parseExplicitPresetPath(int argc, char* argv[])
 {
     std::string val = parseOption(argc, argv, "--presets", "-p");
     if (!val.empty())
         return val;
 
     const char* envPath = std::getenv("PROJECTM_PRESETS_PATH");
-    if (envPath) {
+    if (envPath && *envPath) {
         return envPath;
     }
 
-    return "presets";
+    return "";
 }
 
 static bool parseFlag(int argc, char* argv[], const char* flag)
@@ -492,7 +497,7 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    std::string presetPath = parsePresetPath(argc, argv);
+    std::string presetPath = parseExplicitPresetPath(argc, argv);
     std::string audioSource = parseOption(argc, argv, "--audio", "-a");
     bool startFullscreen = parseFlag(argc, argv, "--fullscreen") ||
                            parseFlag(argc, argv, "-f");
@@ -507,6 +512,13 @@ int main(int argc, char* argv[])
         AudioManager::printAudioDevices();
         SDL_Quit();
         return 0;
+    }
+
+    if (presetPath.empty()) {
+        presetPath = extractEmbeddedPresets();
+    }
+    if (presetPath.empty()) {
+        presetPath = "presets";
     }
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
