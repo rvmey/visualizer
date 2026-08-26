@@ -36,7 +36,7 @@ MilkdropVisualizer [options]
 
 | Flag | Description |
 |------|-------------|
-| `-p, --presets <path>` | Path to directory containing `.milk` preset files (default: `presets`, or `PROJECTM_PRESETS_PATH` env var) |
+| `-p, --presets <path>` | Path to directory containing `.milk` preset files (default: presets embedded in the executable, or `PROJECTM_PRESETS_PATH` env var) |
 | `-a, --audio <source>` | Audio source: `loopback`, `mic`, device index, or device name (default: `loopback` on Windows) |
 | `--list-audio` | List available audio capture devices and exit |
 | `-f, --fullscreen` | Start in fullscreen mode |
@@ -78,6 +78,24 @@ MilkdropVisualizer --list-audio
 | `I` | Switch audio source (WASAPI loopback / mic) |
 | `Up` / `Down` | Adjust beat sensitivity |
 | `Esc` / `Ctrl+Q` | Quit |
+
+## Presets
+
+The full preset library ships baked into the executable — no external presets folder is required to run it. At build time, [`tools/preset_packer.cpp`](tools/preset_packer.cpp) recursively collects every `.milk` file under `MILKDROP_PRESETS_SOURCE_DIR` (a CMake cache variable, defaulting to `D:/appdev/milkdrop/presets-cream-of-the-crop`) into a single blob that's embedded as a resource in the `.exe`. On first launch, the app unpacks that blob into `%APPDATA%\MilkdropVisualizer\presets` (a one-time cost of well under a minute); later launches detect the cached copy and skip straight to loading.
+
+**To update the embedded preset set:**
+
+1. Point `MILKDROP_PRESETS_SOURCE_DIR` at the folder you want to embed (subfolders are scanned recursively), either by editing the cache variable or reconfiguring:
+   ```bash
+   cmake -B build -DMILKDROP_PRESETS_SOURCE_DIR="D:/path/to/presets"
+   ```
+2. Delete the previously generated pack so it gets rebuilt:
+   ```bash
+   rm build/generated/presets.pack
+   ```
+3. Rebuild as usual (`cmake --build build --config Release`). The next run of the app will detect the new pack (the size/count no longer matches its cached marker) and re-extract automatically.
+
+To use a preset folder without rebuilding at all — e.g. while testing new presets — pass `-p`/`--presets` or set `PROJECTM_PRESETS_PATH`; either bypasses the embedded set entirely and reads straight from disk.
 
 ## Audio Sources
 
