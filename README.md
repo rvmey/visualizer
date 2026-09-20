@@ -14,7 +14,7 @@ A standalone music visualizer powered by [projectM](https://github.com/projectM-
 All libraries can be installed via [vcpkg](https://vcpkg.io/):
 
 ```
-vcpkg install projectm4 sdl2 sdl2-ttf glew
+vcpkg install projectm sdl2 sdl2-ttf glew
 ```
 
 ## Building
