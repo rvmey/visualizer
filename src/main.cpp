@@ -313,7 +313,7 @@ static void syncWindowSize(AppContext& ctx)
 
 static void updateWindowTitle(AppContext& ctx)
 {
-    std::string title = "MilkDrop Visualizer test 1";
+    std::string title = "MilkDrop Visualizer test 2";
 
     uint32_t index = projectm_playlist_get_position(ctx.switcher->front.playlist);
     char* presetName = projectm_playlist_item(ctx.switcher->front.playlist, index);
